@@ -132,7 +132,11 @@ client.once(Events.ClientReady, async (c) => {
 const lastCall = new Map(); // 投稿者ID → 最後に呼んだ時刻
 client.on(Events.MessageCreate, (message) => {
   if (!TEXT_IDS.has(message.channelId) && message.channelId !== VOICE_ID) return; // 決めたチャンネルだけ
-  if (message.author.bot || !message.mentions.users.has(client.user.id)) return;   // Bot宛てメンションだけ
+  // Bot宛てメンションだけ。Botと同じ名前の「Botのロール」へのメンションも呼び出しとして扱う（選び間違えやすい）
+  const botRole = message.guild.members.me?.roles.botRole;
+  // 本文に書かれたメンションだけを見る。返信（リプライ）で自動的に付くメンションは呼び出しにしない
+  const called = new RegExp(`<@!?${client.user.id}>`).test(message.content) || (botRole && message.content.includes(`<@&${botRole.id}>`));
+  if (message.author.bot || !called) return;
   const now = Date.now();
   if (now - (lastCall.get(message.author.id) ?? 0) < COOLDOWN_MS) { // 連投よけ
     void message.react('⏳').catch(() => {});
@@ -142,7 +146,7 @@ client.on(Events.MessageCreate, (message) => {
 
   // 本文から「@Bot名」とURLを外して、読み上げる文にする
   let body = message.cleanContent;
-  for (const name of [message.guild.members.me?.displayName, client.user.displayName, client.user.username]) {
+  for (const name of [message.guild.members.me?.displayName, client.user.displayName, client.user.username, botRole?.name]) {
     if (name) body = body.split(`@${name}`).join(' ');
   }
   body = body.replace(/https?:\/\/\S+/g, ' URL ').replace(/\s+/g, ' ').trim().slice(0, MAX_LENGTH);

@@ -1,6 +1,6 @@
 // 分身Bot：打ち込んだ文を、Discordのボイスチャンネルで代わりに喋る
 // 受付モードを足すと、決めたボイスチャンネルに居続けて、Bot宛てのメンションも読み上げる
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import {
   Client, Events, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder,
@@ -196,6 +196,29 @@ async function stayInReception() {
     console.error('受付のボイスチャンネルに入れません:', e.message);
   }
 }
+// 予約アナウンス：announce.txt に「18:30 あと5分なのだ」のように1行ずつ書くと、その時刻に受付のボイスチャンネルで読む。
+// 時刻の無い行はすぐ読む。読んだ行はファイルから消える。時刻はこのPCの時計で、当日ぶんだけ
+const ANNOUNCE_FILE = new URL('./announce.txt', import.meta.url);
+function checkAnnouncements() {
+  if (!receptionGuildId || !getVoiceConnection(receptionGuildId) || !existsSync(ANNOUNCE_FILE)) return;
+  try {
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const keep = [];
+    for (const line of readFileSync(ANNOUNCE_FILE, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*(\d{1,2}):(\d{2})\s+(.+)$/);
+      const body = (m ? m[3] : line).trim();
+      if (!body || body.startsWith('#')) { if (line.trim()) keep.push(line); continue; }
+      if (m && Number(m[1]) * 60 + Number(m[2]) > nowMin) { keep.push(line); continue; }
+      const text = cleanText(body, dict, MAX_LENGTH);
+      console.log(`予約アナウンス：${text}`);
+      if (text) say(receptionGuildId, text, { announce: true, speaker: receptionSpeaker });
+    }
+    writeFileSync(ANNOUNCE_FILE, keep.length ? keep.join('\n') + '\n' : '');
+  } catch (e) {
+    console.error('announce.txt を読めません:', e.message);
+  }
+}
 // 受付のテキストチャンネルに知らせを書く（書き込み権限が無ければログに出すだけ）
 async function notifyReception(content) {
   if (!RECEPTION_NOTICE) return;
@@ -273,6 +296,7 @@ client.once(Events.ClientReady, async (c) => {
     await stayInReception();
     if (getVoiceConnection(receptionGuildId)) await notifyReception(openingNotice());
     setInterval(() => void stayInReception(), 30_000); // 切れたら入り直す
+    setInterval(checkAnnouncements, 5_000);
   }
   // 起動時点であなたがすでにボイスチャンネルにいたら、そこに入る
   if (AUTO_FOLLOW) {
@@ -300,7 +324,11 @@ function handleReception(message) {
   const connection = getVoiceConnection(receptionGuildId);
   if (!connection) return;
   if (!RECEPTION_TEXT_IDS.has(message.channelId) && message.channelId !== connection.joinConfig.channelId) return;
-  if (message.author.bot || !message.mentions.users.has(client.user.id)) return;
+  // Bot本人へのメンションのほか、Botと同じ名前の「Botのロール」へのメンションも呼び出しとして扱う（入力候補で選び間違えやすい）
+  const botRole = message.guild?.members.me?.roles.botRole;
+  // 本文に書かれたメンションだけを見る。返信（リプライ）で自動的に付くメンションは呼び出しにしない
+  const called = new RegExp(`<@!?${client.user.id}>`).test(message.content) || (botRole && message.content.includes(`<@&${botRole.id}>`));
+  if (message.author.bot || !called) return;
   const now = Date.now();
   if (now - (lastCall.get(message.author.id) ?? 0) < RECEPTION_COOLDOWN_MS
     || voiceOf(receptionGuildId).queue.length >= RECEPTION_QUEUE_MAX) {
@@ -309,7 +337,7 @@ function handleReception(message) {
   }
   lastCall.set(message.author.id, now);
   const name = message.member?.displayName ?? message.author.displayName;
-  const botNames = [message.guild?.members.me?.displayName, client.user.displayName, client.user.username].filter(Boolean);
+  const botNames = [message.guild?.members.me?.displayName, client.user.displayName, client.user.username, botRole?.name].filter(Boolean);
   const text = receptionText(name, message.cleanContent, botNames, dict, MAX_LENGTH);
   console.log(`呼び出し：${text}`);
   say(receptionGuildId, text, { announce: true, speaker: receptionSpeaker, onDone: () => void message.react('✅').catch(() => {}) });

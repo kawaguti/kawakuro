@@ -3,3 +3,5 @@ node_modules/
 # 手元だけに置くもの（アイコン画像、記事の下書き）
 icon/
 blog.md
+blog-thumbnail.jpg
+announce.txt
