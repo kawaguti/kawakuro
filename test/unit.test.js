@@ -41,3 +41,16 @@ test('チャイムと無音は 48kHz ステレオ s16le の長さになる', () 
   assert.equal(chime().length, Math.round(48000 * 1.3) * 4);
   assert.ok(chime().some((b) => b !== 0));
 });
+
+test('時刻つきの文を予約として見分ける', async () => {
+  const { parseTimed } = await import('../text.js');
+  assert.deepEqual(parseTimed('18:30 あと5分なのだ'), { hour: 18, minute: 30, body: 'あと5分なのだ' });
+  assert.deepEqual(parseTimed('  １８：３０　あと5分'), { hour: 18, minute: 30, body: 'あと5分' });
+  assert.deepEqual(parseTimed('18時30分に 集合なのだ'), { hour: 18, minute: 30, body: '集合なのだ' });
+  assert.deepEqual(parseTimed('9時 朝会'), { hour: 9, minute: 0, body: '朝会' });
+  assert.deepEqual(parseTimed('18時半 懇親会'), { hour: 18, minute: 30, body: '懇親会' });
+  assert.equal(parseTimed('いま1階に着きました'), null);
+  assert.equal(parseTimed('18:30'), null);
+  assert.equal(parseTimed('25:00 だめ'), null);
+  assert.equal(parseTimed('3時だからシナモンロール食べる'), null);
+});

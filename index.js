@@ -1,6 +1,6 @@
 // 分身Bot：打ち込んだ文を、Discordのボイスチャンネルで代わりに喋る
 // 受付モードを足すと、決めたボイスチャンネルに居続けて、Bot宛てのメンションも読み上げる
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import {
   Client, Events, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder,
@@ -9,7 +9,7 @@ import {
   AudioPlayerStatus, StreamType, VoiceConnectionStatus,
   createAudioPlayer, createAudioResource, entersState, getVoiceConnection, joinVoiceChannel,
 } from '@discordjs/voice';
-import { cleanText, receptionText } from './text.js';
+import { cleanText, parseTimed, receptionText } from './text.js';
 import { resolveSpeaker, synthesize } from './voicevox.js';
 import { chime, silence } from './chime.js';
 
@@ -205,14 +205,17 @@ function checkAnnouncements() {
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
     const keep = [];
+    const spoken = new Set(); // 同じ時刻に同じ文が重なっていたら、1回だけ読む
     for (const line of readFileSync(ANNOUNCE_FILE, 'utf8').split(/\r?\n/)) {
       const m = line.match(/^\s*(\d{1,2}):(\d{2})\s+(.+)$/);
       const body = (m ? m[3] : line).trim();
       if (!body || body.startsWith('#')) { if (line.trim()) keep.push(line); continue; }
       if (m && Number(m[1]) * 60 + Number(m[2]) > nowMin) { keep.push(line); continue; }
       const text = cleanText(body, dict, MAX_LENGTH);
+      if (!text || spoken.has(text)) continue;
+      spoken.add(text);
       console.log(`予約アナウンス：${text}`);
-      if (text) say(receptionGuildId, text, { announce: true, speaker: receptionSpeaker });
+      say(receptionGuildId, text, { announce: true, speaker: receptionSpeaker });
     }
     writeFileSync(ANNOUNCE_FILE, keep.length ? keep.join('\n') + '\n' : '');
   } catch (e) {
@@ -329,6 +332,18 @@ function handleReception(message) {
   // 本文に書かれたメンションだけを見る。返信（リプライ）で自動的に付くメンションは呼び出しにしない
   const called = new RegExp(`<@!?${client.user.id}>`).test(message.content) || (botRole && message.content.includes(`<@&${botRole.id}>`));
   if (message.author.bot || !called) return;
+  // 「@Bot 18:30 あと5分です」のように先頭に時刻があれば、その時刻の予約にする（今日のこれからの時刻だけ。過ぎていたらふつうに読む）
+  const timed = parseTimed(message.content.replace(/<[@#][!&]?\d+>/g, ' '));
+  if (timed) {
+    const d = new Date();
+    if (timed.hour * 60 + timed.minute > d.getHours() * 60 + d.getMinutes()) {
+      const hhmm = `${timed.hour}:${String(timed.minute).padStart(2, '0')}`;
+      appendFileSync(ANNOUNCE_FILE, `${hhmm} ${timed.body.replace(/\s+/g, ' ')}\n`);
+      console.log(`予約を受け付け：${hhmm} ${timed.body}`);
+      void message.react('🕒').catch(() => {});
+      return;
+    }
+  }
   const now = Date.now();
   if (now - (lastCall.get(message.author.id) ?? 0) < RECEPTION_COOLDOWN_MS
     || voiceOf(receptionGuildId).queue.length >= RECEPTION_QUEUE_MAX) {

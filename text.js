@@ -50,3 +50,16 @@ export function receptionText(name, raw, botNames = [], dict = {}, maxLength = M
   const who = cleanText(name, dict, 30) || 'だれか';
   return body ? `${who}さんから。${body}` : `${who}さんから呼び出しです`;
 }
+
+// 「18:30 あと5分です」「18時30分 あと5分です」のように、先頭に時刻がある文を {hour, minute, body} に分ける。
+// 時刻が無い、または本文が空なら null。全角の数字やコロンも受け付ける
+export function parseTimed(raw) {
+  const s = String(raw ?? '').normalize('NFKC').trim();
+  const m = s.match(/^(\d{1,2})(?::(\d{2})|時(?:(\d{1,2})分|半)?)に?[\s、,]+([\s\S]+)$/);
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = m[2] != null ? Number(m[2]) : m[3] != null ? Number(m[3]) : /^\d{1,2}時半/.test(s) ? 30 : 0;
+  const body = m[4].trim();
+  if (hour > 23 || minute > 59 || !body) return null;
+  return { hour, minute, body };
+}
